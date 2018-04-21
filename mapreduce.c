@@ -6,16 +6,16 @@
 
 #include "mapreduce.h"
 
-#define INIT_SIZE (15)
-#define INIT_ARRLIST_SIZE (10)
+#define INIT_SIZE (4096)
+#define INIT_ARRLIST_SIZE (4096)
 
 Partitioner partition_func;
 static int num_partitions;
 
 //define node and hashtable
 typedef struct {
-    long size;
-    long num_items;
+    int size;
+    int num_items;
     char **val_list;
     pthread_mutex_t lock;
 } ArrList;
@@ -147,7 +147,9 @@ void expand(ht_table *table) {
 void ht_insert(ht_table *table, char *key, char *value) {
     int load = table->count * 100 / table->size;
     if (load > 70) {
+        pthread_mutex_lock(&table->lock);
         expand(table);
+        pthread_mutex_unlock(&table->lock);
     }
 
     int attempt = 0;
@@ -198,17 +200,17 @@ unsigned long MR_DefaultHashPartition(char *key, int num_partitions) {
 static Mapper mapper;
 static int argcnt;
 static char **argvec;
-static int ptr = 1;
+static int fileptr = 1;
 
 pthread_mutex_t filelock = PTHREAD_MUTEX_INITIALIZER;
 
 char *get_filename() {
     pthread_mutex_lock(&filelock);
     char *filename;
-    if (ptr >= argcnt) {
+    if (fileptr >= argcnt) {
         filename = NULL;
     } else {
-        filename = argvec[ptr++];
+        filename = argvec[fileptr++];
     }
     pthread_mutex_unlock(&filelock);
     return filename;
@@ -243,19 +245,46 @@ void *sort_thread(void *arg) {
     int index = *(int *)arg;
     ht_table *table = tables[index];
     Element **elements = table->elements;
-    printf("before qsort %d\n", index); fflush(stdout);
     qsort(elements, table->size, sizeof(Element *), compar);
-    printf("after qsort %d\n", index); fflush(stdout);
     free(arg);
     return NULL;
 }
 
+int **kptrs;
+int **vptrs;
+
 char *get_next(char *key, int partition_num) {
     Element **elements = tables[partition_num]->elements;
-    return NULL;
+    int *vptr = vptrs[partition_num];
+    int *kptr = kptrs[partition_num];
+    ArrList *arrList = elements[*kptr]->list;
+    if (*vptr >= arrList->num_items) {
+        *vptr = 0;
+        return NULL;
+    }
+    char *val = arrList->val_list[(*vptr)++];
+    return val;
 }
 
+typedef struct {
+    Reducer reducer;
+    int partition_number;
+} ReArgs;
+
 void *reduce_thread(void *arg) {
+    ReArgs *reArgs = (ReArgs *)arg;
+
+    Reducer reducer = reArgs->reducer;
+    int partition_number = reArgs->partition_number;
+    int *kptr = kptrs[partition_number];
+
+    Element **elements = tables[partition_number]->elements;
+    for (*kptr = 0; *kptr < tables[partition_number]->count; (*kptr)++) {
+        char *key = elements[*kptr]->key;
+        reducer(key, get_next, partition_number);
+    }
+
+    free(reArgs);
     return NULL;
 }
 
@@ -267,12 +296,14 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
     argcnt = argc;
     argvec = argv;
 
+    // initialize hash tables
     tables = malloc(num_reducers * sizeof(ht_table));
     int i;
     for (i = 0; i < num_reducers; i++) {
         tables[i] = new_table(INIT_SIZE);
     }
 
+    // mapping...
     pthread_t mthreads[num_mappers];
     for (i = 0; i < num_mappers; i++) {
         pthread_create(&mthreads[i], NULL, map_thread, NULL);
@@ -281,6 +312,7 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
         pthread_join(mthreads[i], NULL);
     }
 
+    // sorting...
     pthread_t sthreads[num_partitions];
     for (i = 0; i < num_partitions; i++) {
         int *index = malloc(sizeof(int));
@@ -291,26 +323,50 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
         pthread_join(sthreads[i], NULL);
     }
 
-
-    for (int ind = 0; ind < num_reducers; ind++) {
-        ht_table *table = tables[ind];
-        printf("\n\nStart printing...\n\n"); fflush(stdout);
-        Element *element;
-        for (i = 0; i < table->size; i++) {
-            printf("element %d: %p\n", i, table->elements[i]);
-            if (table->elements[i] != NULL) {
-                element = (table->elements)[i];
-                printf("%s->", element->key);
-                int j;
-                for (j = 0; j < element->list->num_items; j++) {
-                    printf("%s, ", element->list->val_list[j]);
-                }
-                printf("\n");
-            }
-        }
-        ht_free(table);
+    // initialize pointers for reduce
+    kptrs = malloc(num_reducers * sizeof(int *));
+    for (i = 0; i < num_reducers; i++) {
+        kptrs[i] = malloc(sizeof(int));
+        *kptrs[i] = 0;
+    }
+    vptrs = malloc(num_reducers * sizeof(int *));
+    for (i = 0; i < num_reducers; i++) {
+        vptrs[i] = malloc(sizeof(int));
+        *vptrs[i] = 0;
     }
 
+    // reducing...
+    pthread_t rthreads[num_reducers];
+    for (i = 0; i < num_reducers; i++) {
+        ReArgs *reArgs = malloc(sizeof(ReArgs));
+        reArgs->reducer = reduce;
+        reArgs->partition_number = i;
+        pthread_create(&rthreads[i], NULL, reduce_thread, reArgs);
+    }
+    for (i = 0; i < num_reducers; i++) {
+        pthread_join(rthreads[i], NULL);
+    }
 
+//    for (int ind = 0; ind < num_reducers; ind++) {
+//        ht_table *table = tables[ind];
+//        printf("\n\nStart printing...\n\n"); fflush(stdout);
+//        Element *element;
+//        for (i = 0; i < table->size; i++) {
+//            printf("element %d: %p\n", i, table->elements[i]);
+//            if (table->elements[i] != NULL) {
+//                element = (table->elements)[i];
+//                printf("%s->", element->key);
+//                int j;
+//                for (j = 0; j < element->list->num_items; j++) {
+//                    printf("%s, ", element->list->val_list[j]);
+//                }
+//                printf("\n");
+//            }
+//        }
+//        ht_free(table);
+//    }
+
+
+    // TODO: free kptrs and vptrs
     free(tables);
 }
