@@ -7,6 +7,7 @@
 #include "mapreduce.h"
 
 #define INIT_SIZE (15)
+#define INIT_ARRLIST_SIZE (10)
 
 Partitioner partition_func;
 static int num_partitions;
@@ -33,7 +34,7 @@ typedef struct {
 
 void init_list(ArrList *arrList) {
     pthread_mutex_init(&arrList->lock, NULL);
-    arrList->size = INIT_SIZE;
+    arrList->size = INIT_ARRLIST_SIZE;
     arrList->num_items = 0;
     arrList->val_list = malloc(arrList->size * sizeof(char *));
 }
@@ -156,10 +157,11 @@ void ht_insert(ht_table *table, char *key, char *value) {
         Element *element = table->elements[index];
         pthread_mutex_lock(&table->lock);
         if (element == NULL) {
-            element = malloc(sizeof(Element *));
+            element = malloc(sizeof(Element));
             table->elements[index] = element;
             pthread_mutex_unlock(&table->lock);
             element->key = strdup(key);
+//            printf("inserting: %p into %p\n", element->key, element);
             element->list = malloc(sizeof(ArrList));
             init_list(element->list);
             list_add(element->list, strdup(value));
@@ -168,7 +170,7 @@ void ht_insert(ht_table *table, char *key, char *value) {
             break;
         } else {
             pthread_mutex_unlock(&table->lock);
-            printf("element->key: %s\n", element->key);
+//            printf("element->key: %s\n", element->key);
             if (strcmp(key, element->key) == 0) {
                 list_add(element->list, strdup(value));
                 break;
@@ -221,12 +223,15 @@ void *map_thread(void *arg) {
 }
 
 int compar(const void *e1, const void *e2) {
-    Element *a = (Element *)e1;
-    Element *b = (Element *)e2;
-    if ((a == NULL && b == NULL) || (a->key == NULL && b->key == NULL)) {
+    Element *a = *(Element **)e1;
+    Element *b = *(Element **)e2;
+    if (a == NULL && b == NULL) {
         return 0;
     }
-    else if (a == NULL || a->key == NULL) {
+    if (a != NULL && b != NULL && a->key == NULL && b->key == NULL) {
+        return 0;
+    }
+    if (a == NULL || a->key == NULL) {
         return 1;
     } else if (b == NULL || b->key == NULL) {
         return -1;
@@ -246,7 +251,7 @@ void *sort_thread(void *arg) {
 }
 
 char *get_next(char *key, int partition_num) {
-
+    Element **elements = tables[partition_num]->elements;
     return NULL;
 }
 
@@ -256,12 +261,6 @@ void *reduce_thread(void *arg) {
 
 void
 MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int num_reducers, Partitioner partition) {
-    if (argc == 1) {
-        printf("mapreduce: file1 [file2 ...]\n");
-        exit(1);
-    }
-    printf("argv[1] is %s\n", argv[1]);
-
     partition_func = partition;
     num_partitions = num_reducers;
     mapper = map;
@@ -282,10 +281,9 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
         pthread_join(mthreads[i], NULL);
     }
 
-    // TODO: sort
     pthread_t sthreads[num_partitions];
     for (i = 0; i < num_partitions; i++) {
-        int *index = malloc(sizeof(int *));
+        int *index = malloc(sizeof(int));
         *index = i;
         pthread_create(&sthreads[i], NULL, sort_thread, index);
     }
@@ -293,11 +291,6 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
         pthread_join(sthreads[i], NULL);
     }
 
-//    pthread_t trd;
-//    int *sdf = malloc(sizeof(int *));
-//    *sdf = 3;
-//    pthread_create(&trd, NULL, sort_thread, sdf);
-//    pthread_join(trd, NULL);
 
     for (int ind = 0; ind < num_reducers; ind++) {
         ht_table *table = tables[ind];
