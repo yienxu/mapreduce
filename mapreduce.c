@@ -6,8 +6,8 @@
 
 #include "mapreduce.h"
 
-#define INIT_SIZE (4096)
-#define INIT_ARRLIST_SIZE (4096)
+#define INIT_SIZE (3)  // NEVER USE 2 !!!!!!!!
+#define INIT_ARRLIST_SIZE (2)
 
 Partitioner partition_func;
 static int num_partitions;
@@ -142,6 +142,8 @@ void expand(ht_table *table) {
             }
         }
     }
+
+    free(old_elements);
 }
 
 void ht_insert(ht_table *table, char *key, char *value) {
@@ -288,6 +290,14 @@ void *reduce_thread(void *arg) {
     return NULL;
 }
 
+void ptrs_free(int **ptrs, int size) {
+    int i;
+    for (i = 0; i < size; i++) {
+        free(ptrs[i]);
+    }
+    free(ptrs);
+}
+
 void
 MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int num_reducers, Partitioner partition) {
     partition_func = partition;
@@ -366,7 +376,10 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
 //        ht_free(table);
 //    }
 
-
-    // TODO: free kptrs and vptrs
+    ptrs_free(kptrs, num_reducers);
+    ptrs_free(vptrs, num_reducers);
+    for (i = 0; i < num_partitions; i++) {
+        ht_free(tables[i]);
+    }
     free(tables);
 }
