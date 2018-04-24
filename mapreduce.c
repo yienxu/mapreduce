@@ -6,12 +6,8 @@
 
 #include "mapreduce.h"
 
-#define INIT_ARRLIST_SIZE (4096)
+#define INIT_ARRLIST_SIZE (65536)
 
-Partitioner partition_func;
-static int num_partitions;
-
-//define node and hashtable
 typedef struct {
     char *key;
     char *val;
@@ -24,8 +20,18 @@ typedef struct {
     pthread_mutex_t lock;
 } ArrList;
 
+Partitioner partition_func;
+Mapper mapper;
 
 ArrList **lists;
+
+int num_partitions;
+int argcnt;
+char **argvec;
+int fileptr;
+
+pthread_mutex_t filelock = PTHREAD_MUTEX_INITIALIZER;
+
 
 void init_list(ArrList *arrList) {
     pthread_mutex_init(&arrList->lock, NULL);
@@ -60,13 +66,6 @@ unsigned long MR_DefaultHashPartition(char *key, int num_partitions) {
         hash = hash * 33 + c;
     return hash % num_partitions;
 }
-
-static Mapper mapper;
-static int argcnt;
-static char **argvec;
-static int fileptr = 1;
-
-pthread_mutex_t filelock = PTHREAD_MUTEX_INITIALIZER;
 
 char *get_filename() {
     pthread_mutex_lock(&filelock);
@@ -157,6 +156,7 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
     mapper = map;
     argcnt = argc;
     argvec = argv;
+    fileptr = 1;
 
     // initialize hash tables
     lists = malloc(num_partitions * sizeof(ArrList *));
