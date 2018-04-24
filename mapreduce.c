@@ -20,7 +20,12 @@ typedef struct {
     pthread_mutex_t lock;
 } ArrList;
 
-Partitioner partition_func;
+typedef struct {
+    Reducer reducer;
+    int partition_number;
+} ReArgs;
+
+Partitioner partitioner;
 Mapper mapper;
 
 ArrList **lists;
@@ -29,9 +34,18 @@ int num_partitions;
 int argcnt;
 char **argvec;
 int fileptr;
+int **kptrs;
 
 pthread_mutex_t filelock = PTHREAD_MUTEX_INITIALIZER;
 
+
+unsigned long MR_DefaultHashPartition(char *key, int num_partitions) {
+    unsigned long hash = 5381;
+    int c;
+    while ((c = *key++) != '\0')
+        hash = hash * 33 + c;
+    return hash % num_partitions;
+}
 
 void init_list(ArrList *arrList) {
     pthread_mutex_init(&arrList->lock, NULL);
@@ -50,21 +64,24 @@ void list_add(ArrList *arrList, Element e) {
     pthread_mutex_unlock(&arrList->lock);
 }
 
+void list_free(ArrList *arrList) {
+    Element *elements = arrList->elements;
+    int i;
+    for (i = 0; i < arrList->size; i++) {
+        free(elements[i].key);
+        free(elements[i].val);
+    }
+    free(elements);
+    free(arrList);
+}
+
 void MR_Emit(char *key, char *value) {
-    int part = partition_func(key, num_partitions);
+    int part = partitioner(key, num_partitions);
     ArrList *arrList = lists[part];
     Element e;
     e.key = strdup(key);
     e.val = strdup(value);
     list_add(arrList, e);
-}
-
-unsigned long MR_DefaultHashPartition(char *key, int num_partitions) {
-    unsigned long hash = 5381;
-    int c;
-    while ((c = *key++) != '\0')
-        hash = hash * 33 + c;
-    return hash % num_partitions;
 }
 
 char *get_filename() {
@@ -87,7 +104,6 @@ void *map_thread(void *arg) {
     return NULL;
 }
 
-// TODO: check if compar is correct
 int compar(const void *e1, const void *e2) {
     Element a = *(Element *)e1;
     Element b = *(Element *)e2;
@@ -102,8 +118,6 @@ void *sort_thread(void *arg) {
     free(arg);
     return NULL;
 }
-
-int **kptrs;
 
 char *get_next(char *key, int partition_num) {
     Element *elements = lists[partition_num]->elements;
@@ -120,11 +134,6 @@ char *get_next(char *key, int partition_num) {
     return val;
 }
 
-typedef struct {
-    Reducer reducer;
-    int partition_number;
-} ReArgs;
-
 void *reduce_thread(void *arg) {
     ReArgs *reArgs = (ReArgs *)arg;
 
@@ -133,7 +142,8 @@ void *reduce_thread(void *arg) {
     int *kptr = kptrs[partition_number];
 
     Element *elements = lists[partition_number]->elements;
-    for (*kptr = 0; *kptr < lists[partition_number]->size;) {
+    int size = lists[partition_number]->size;
+    for (*kptr = 0; *kptr < size;) {
         char *key = elements[*kptr].key;
         reducer(key, get_next, partition_number);
     }
@@ -151,7 +161,7 @@ void ptrs_free(int **ptrs, int size) {
 
 void
 MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int num_reducers, Partitioner partition) {
-    partition_func = partition;
+    partitioner = partition;
     num_partitions = num_reducers;
     mapper = map;
     argcnt = argc;
@@ -205,23 +215,10 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
         pthread_join(rthreads[i], NULL);
     }
 
-//    for (i = 0; i < num_partitions; i++) {
-//        ArrList *arrList = lists[i];
-//        printf("List %d:\n", i);
-//        int j;
-//        for (j = 0; j < arrList->size; j++) {
-//            Element *elements = arrList->elements;
-//            char *key = elements[j].key;
-//            char *val = elements[j].val;
-//            printf("(%s, %s) ", key, val);
-//        }
-//        printf("\n");
-//    }
-
-//    ptrs_free(kptrs, num_reducers);
-//    ptrs_free(vptrs, num_reducers);
-//    for (i = 0; i < num_partitions; i++) {
-//        ht_free(tables[i]);
-//    }
-//    free(tables);
+    // freeing... YAY!
+    ptrs_free(kptrs, num_reducers);
+    for (i = 0; i < num_partitions; i++) {
+        list_free(lists[i]);
+    }
+    free(lists);
 }
