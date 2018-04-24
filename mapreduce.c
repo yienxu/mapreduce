@@ -102,6 +102,11 @@ int ht_get_hash(const char *s, const int num_buckets, const int attempt) {
     const int hash_a = ht_hash(s, prime1, num_buckets);
     const int hash_b = ht_hash(s, prime2, num_buckets);
     return (hash_a + (attempt * (hash_b + 1))) % num_buckets;
+//    unsigned long hash = 5381;
+//    int c;
+//    while ((c = *s++) != '\0')
+//        hash = hash * 33 + c;
+//    return hash % num_buckets;
 }
 
 void ht_free(ht_table *table) {
@@ -152,15 +157,27 @@ void ht_insert(ht_table *table, char *key, char *value) {
         expand(table);
         pthread_mutex_unlock(&table->lock);
     }
-	if (strcmp(key, "purchasing") == 0) 
-		printf("break\n");
+
     int attempt = 0;
-    int index;
-    if (strcmp(key, "verizon\n") == 0) {
-        printf("verizon reached\n");fflush(stdout);
-    }
+    int index = -1;
+//    if (strcmp(key, "any\n") == 0) {
+//        printf("verizon reached\n");fflush(stdout);
+//    }
+//    int first_hash = 0;
+    int is_first = 1;
     while (1) {
-        index = ht_get_hash(key, table->size, attempt++);
+        if (is_first) {
+            index = ht_get_hash(key, table->size, attempt++);
+        }
+        if (is_first) {
+//            first_hash = index;
+            is_first = 0;
+        }
+        if (!is_first) {
+//            printf("LOOP: key = %s, index = %d\n", key, index);
+            index = index + 1 >= table->size ? 0 : index + 1;
+//            is_first = 1;
+        }
         Element *element = table->elements[index];
         pthread_mutex_lock(&table->lock);
         if (element == NULL) {
@@ -306,6 +323,8 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
     mapper = map;
     argcnt = argc;
     argvec = argv;
+
+//    printf("next hash = %d\n", ht_get_hash("verizon\n", 16421, 100));
 
     // initialize hash tables
     tables = malloc(num_reducers * sizeof(ht_table));
