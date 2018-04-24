@@ -6,8 +6,8 @@
 
 #include "mapreduce.h"
 
-#define INIT_SIZE (3)  // NEVER USE 2 !!!!!!!!
-#define INIT_ARRLIST_SIZE (2)
+#define INIT_SIZE (4096)  // NEVER USE 2 !!!!!!!!
+#define INIT_ARRLIST_SIZE (4096)
 
 Partitioner partition_func;
 static int num_partitions;
@@ -43,7 +43,7 @@ void list_add(ArrList *arrList, char *val) {
     pthread_mutex_lock(&arrList->lock);
     if (arrList->num_items == arrList->size) {
         arrList->size *= 2;
-        arrList->val_list = realloc(arrList->val_list, arrList->size);
+        arrList->val_list = realloc(arrList->val_list, arrList->size*sizeof(char *));
     }
     arrList->val_list[arrList->num_items++] = val;
     pthread_mutex_unlock(&arrList->lock);
@@ -142,7 +142,6 @@ void expand(ht_table *table) {
             }
         }
     }
-
     free(old_elements);
 }
 
@@ -153,15 +152,19 @@ void ht_insert(ht_table *table, char *key, char *value) {
         expand(table);
         pthread_mutex_unlock(&table->lock);
     }
-
+	if (strcmp(key, "purchasing") == 0) 
+		printf("break\n");
     int attempt = 0;
     int index;
+    if (strcmp(key, "verizon\n") == 0) {
+        printf("verizon reached\n");fflush(stdout);
+    }
     while (1) {
         index = ht_get_hash(key, table->size, attempt++);
         Element *element = table->elements[index];
         pthread_mutex_lock(&table->lock);
         if (element == NULL) {
-            element = malloc(sizeof(Element));
+            element = calloc(1, sizeof(Element));
             table->elements[index] = element;
             pthread_mutex_unlock(&table->lock);
             element->key = strdup(key);
@@ -178,12 +181,10 @@ void ht_insert(ht_table *table, char *key, char *value) {
             if (strcmp(key, element->key) == 0) {
                 list_add(element->list, strdup(value));
                 break;
-            } else {
-                index = ht_get_hash(key, table->size, attempt++);
             }
         }
     }
-    printf("insert (%s, %s)\n", key, value); fflush(stdout);
+//    printf("insert (%s, %s)\n", key, value); fflush(stdout);
 }
 
 void MR_Emit(char *key, char *value) {
@@ -333,6 +334,10 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
         pthread_join(sthreads[i], NULL);
     }
 
+//    if (argc > 1) {
+//        return;
+//    }
+
     // initialize pointers for reduce
     kptrs = malloc(num_reducers * sizeof(int *));
     for (i = 0; i < num_reducers; i++) {
@@ -376,10 +381,10 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
 //        ht_free(table);
 //    }
 
-    ptrs_free(kptrs, num_reducers);
-    ptrs_free(vptrs, num_reducers);
-    for (i = 0; i < num_partitions; i++) {
-        ht_free(tables[i]);
-    }
-    free(tables);
+//    ptrs_free(kptrs, num_reducers);
+//    ptrs_free(vptrs, num_reducers);
+//    for (i = 0; i < num_partitions; i++) {
+//        ht_free(tables[i]);
+//    }
+//    free(tables);
 }
