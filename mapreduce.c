@@ -35,6 +35,7 @@ int argcnt;
 char **argvec;
 int fileptr;
 int **kptrs;
+int maxsize = 0;
 
 pthread_mutex_t filelock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -49,7 +50,7 @@ unsigned long MR_DefaultHashPartition(char *key, int num_partitions) {
 
 void init_list(ArrList *arrList) {
     pthread_mutex_init(&arrList->lock, NULL);
-    arrList->capacity = INIT_ARRLIST_SIZE;
+    arrList->capacity = INIT_ARRLIST_SIZE > maxsize ? INIT_ARRLIST_SIZE : maxsize;
     arrList->size = 0;
     arrList->elements = malloc(arrList->capacity * sizeof(Element));
 }
@@ -213,6 +214,13 @@ MR_Run(int argc, char *argv[], Mapper map, int num_mappers, Reducer reduce, int 
     }
     for (i = 0; i < num_reducers; i++) {
         pthread_join(rthreads[i], NULL);
+    }
+
+    for (i = 0; i < num_reducers; i++) {
+        int size = lists[i]->size;
+        if (size > maxsize) {
+            maxsize = size;
+        }
     }
 
     // freeing... YAY!
